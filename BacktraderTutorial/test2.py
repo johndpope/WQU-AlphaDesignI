@@ -10,16 +10,25 @@ import backtrader.feeds as btfeeds
 
 
 class MyStrategy(bt.Strategy):
-    params = dict(period=20, period1=20, period2=25, period3=10, period4=2)
+    params = dict(period=20,
+                  period1=20,
+                  period2=25,
+                  period3=10,
+                  period4=2,
+                  perc1=3,
+                  perc2=1,
+                  valid=4,
+                  smaperiod=15,
+                  exectype='Market')
     # self.params = self.p
 
     def __init__(self):
 
-        sma = btind.SimpleMovingAverage(period=self.p.period)
+        sma = btind.SimpleMovingAverage(period=self.p.smaperiod)
         sma1 = btind.SimpleMovingAverage(self.data, period=self.params.period1)
         sma2 = btind.SimpleMovingAverage(period=self.params.period2)
 
-        myindicator = sma2-sm1 + self.datas[0].close
+        myindicator = sma2-sma1 + self.datas[0].close
 
         self.sma = btind.SimpleMovingAverage(period=self.p.period)
 
@@ -55,7 +64,7 @@ class MyStrategy(bt.Strategy):
         dt = dt or self.data.datetime.date(0)
         print('%s, %s,' %(dt.isoformat(),txt))
 
-    def notify_order(self.order):
+    def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             self.log('Order accepted/Submitted', dt=order.created.dt)
             self.order = order
@@ -113,7 +122,7 @@ class MyStrategy(bt.Strategy):
 
                 if self.p.valid:
                     txt = 'BUY CREATE, exectype Limit, price %.2f, value %s'
-                    self.log(txt %(price, value.strftime(%Y-%m-%d)))
+                    self.log(txt %(price, value.strftime('%Y-%m-%d')))
                 else:
                     txt = 'BUY CREATE, exectype Limit, price %.2f, value %s'
                     self.log(txt % price)
@@ -124,12 +133,14 @@ class MyStrategy(bt.Strategy):
 
 def runstrat():
     args = parse_args()
+
     cerebro = bt.Cerebro()
+
     data = getdata(args)
     cerebro.adddata(data)
 
-    cerebro.addStrategy(
-        OrderExecutionStrategy,
+    cerebro.addstrategy(
+        MyStrategy,
         exectype=args.exectype,
         perc1=args.perc1,
         perc2=args.perc2,
@@ -137,17 +148,19 @@ def runstrat():
         smaperiod=args.smaperiod
     )
 
+    cerebro.run()
+
     if args.plot:
         cerebro.plot(numfigs=args.numfigs, style=args.plotstyle)
 
 def getdata(args):
 
     dataformat = dict(
-        bt = btfeeds.BacktraderCSVData,
-        visualchart = btfeeds.VChartCSVData,
-        sierrrachart = btfeeds.SierraChartCSVData,
-        yahoo = btfeeds.YahooFinanceCSVdata,
-        yahoo_unreversed = btfeeds.YahooFinanceCSVData
+        bt=btfeeds.BacktraderCSVData,
+        visualchart=btfeeds.VChartCSVData,
+        sierrachart=btfeeds.SierraChartCSVData,
+        yahoo=btfeeds.YahooFinanceCSVData,
+        yahoo_unreversed=btfeeds.YahooFinanceCSVData
     )
 
     dfkwargs = dict()
@@ -170,16 +183,59 @@ def getdata(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Showcase for Order Execution Types")
+        description='Showcase for Order Execution Types')
 
     parser.add_argument('--infile', '-i', required=False,
-                        default="",
+                        default="/Users/thanhuwe8/Quantitative Finance Project/WQU-AlphaDesignI/data/2006-day-001.txt",
                         help='File to be read in')
+
     parser.add_argument('--csvformat', '-c', required=False, default='bt',
-                        choices=['bt','visualchart','sierrachart'm
+                        choices=['bt', 'visualchart', 'sierrachart',
                                  'yahoo', 'yahoo_unreversed'],
-                        help = 'CSV Format')
-    parser.add_argument('--fromdate', '-f)
+                        help='CSV Format')
+
+    parser.add_argument('--fromdate', '-f', required=False, default=None,
+                        help='Starting date in YYYY-MM-DD format')
+
+    parser.add_argument('--todate', '-t', required=False, default=None,
+                        help='Ending date in YYYY-MM-DD format')
+
+    parser.add_argument('--plot', '-p', action='store_false', required=False,
+                        help='Plot the read data')
+
+    parser.add_argument('--plotstyle', '-ps', required=False, default='bar',
+                        choices=['bar', 'line', 'candle'],
+                        help='Plot the read data')
+
+    parser.add_argument('--numfigs', '-n', required=False, default=1,
+                        help='Plot using n figures')
+
+    parser.add_argument('--smaperiod', '-s', required=False, default=15,
+                        help='Simple Moving Average Period')
+
+    parser.add_argument('--exectype', '-e', required=False, default='Market',
+                        help=('Execution Type: Market (default), Close, Limit,'
+                              ' Stop, StopLimit'))
+
+    parser.add_argument('--valid', '-v', required=False, default=0, type=int,
+                        help='Validity for Limit sample: default 0 days')
+
+    parser.add_argument('--perc1', '-p1', required=False, default=0.0,
+                        type=float,
+                        help=('%% distance from close price at order creation'
+                              ' time for the limit/trigger price in Limit/Stop'
+                              ' orders'))
+
+    parser.add_argument('--perc2', '-p2', required=False, default=0.0,
+                        type=float,
+                        help=('%% distance from close price at order creation'
+                              ' time for the limit price in StopLimit orders'))
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    runstrat()
 
 
     #
