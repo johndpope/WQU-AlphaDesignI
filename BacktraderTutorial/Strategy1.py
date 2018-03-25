@@ -1,134 +1,146 @@
+
+
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import argparse
-from datetime import datetime
+import datetime
+import os.path
+import time
+import sys
+
 
 import backtrader as bt
-import backtrader.indicators as btind
 import backtrader.feeds as btfeeds
+import backtrader.indicators as btind
 
 
-class MyStrategy(bt.Strategy):
-    params = dict(period=20,
-                  period1=20,
-                  period2=25,
-                  period3=10,
-                  period4=2,
-                  perc1=3,
-                  perc2=1,
-                  valid=4,
-                  smaperiod=15,
-                  exectype='Market')
-    # self.params = self.p
-
-    def __init__(self):
-
-        sma = btind.SimpleMovingAverage(period=self.p.smaperiod)
-        sma1 = btind.SimpleMovingAverage(self.data, period=self.params.period1)
-        sma2 = btind.SimpleMovingAverage(period=self.params.period2)
-
-        myindicator = sma2-sma1 + self.datas[0].close
-
-        self.sma = btind.SimpleMovingAverage(period=self.p.period)
-
-        # see the (delay) notation
-        self.cmpval = self.data.close(-1) > self.sma
-
-        datasum = btind.SumN(self.data, period=self.p.period1)
-
-        # using operators /
-        av = datasum/self.p.period1
-        self.line.sma = av
-
-        # cannot use "and" operators, backtrader provides several methods
-        close_over_sma = self.data.close > sma
-        self.sma_dist_to_high = self.data.high - sma
-        sma_dist_small = self.sma_dist_to_high < 3.5
-
-        sell_sig = bt.And(close_over_sma, sma_dist_small)
-
-        high_or_low = bt.If(sma1 > self.data.close, self.data.low, self.data.high)
-
-        self.buysell = btind.CrossOver(self.data.close, sma, plot=True)
-
-        self.order = None
-
-    def start(self):
-        print("Trading Strategy Simulation starts")
-
-    def stop(self):
-        print("Trading Strategy Simulation ends")
+class OrderExecutionStrategy(bt.Strategy):
+    params = (
+        ('smaperiod', 15),
+        ('exectype', 'Market'),
+        ('perc1', 3),
+        ('perc2', 1),
+        ('valid', 4),
+    )
 
     def log(self, txt, dt=None):
-        dt = dt or self.data.datetime.date(0)
-        print('%s, %s,' %(dt.isoformat(),txt))
+        ''' Logging function fot this strategy'''
+        dt = dt or self.data.datetime[0]
+        if isinstance(dt, float):
+            dt = bt.num2date(dt)
+        print('%s, %s' % (dt.isoformat(), txt))
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
-            self.log('Order accepted/Submitted', dt=order.created.dt)
+            # Buy/Sell order submitted/accepted to/by broker - Nothing to do
+            self.log('ORDER ACCEPTED/SUBMITTED', dt=order.created.dt)
             self.order = order
             return
 
         if order.status in [order.Expired]:
-            self.log['BUY EXPIRED']
+            self.log('BUY EXPIRED')
 
         elif order.status in [order.Completed]:
             if order.isbuy():
                 self.log(
-                    'Buy Executed, Price: %.2f, Cost: %.2f, Comm: %.2f' %
+                    'BUY EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f' %
                     (order.executed.price,
                      order.executed.value,
                      order.executed.comm))
 
-            else:
-                self.log(
-                    'Sell Executed, Price: %.2f, Cost: %.2f, Comm: %.2f'%
-                    (order.executed.price,
-                     order.executed.value,
-                     order.executed.comm))
+            else:  # Sell
+                self.log('SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f' %
+                         (order.executed.price,
+                          order.executed.value,
+                          order.executed.comm))
 
+        # Sentinel to None: new orders allowed
         self.order = None
 
+    def __init__(self):
+        # SimpleMovingAverage on main data
+        # Equivalent to -> sma = btind.SMA(self.data, period=self.p.smaperiod)
+        sma = btind.SMA(period=self.p.smaperiod)
+
+        # CrossOver (1: up, -1: down) close / sma
+        self.buysell = btind.CrossOver(self.data.close, sma, plot=True)
+
+        # Sentinel to None: new ordersa allowed
+        self.order = None
 
     def next(self):
         if self.order:
+            # An order is pending ... nothing can be done
             return
 
+        # Check if we are in the market
         if self.position:
+            # In the maerket - check if it's the time to sell
             if self.buysell < 0:
                 self.log('SELL CREATE, %.2f' % self.data.close[0])
                 self.sell()
 
-        elif self.buysell > 1:
+        elif self.buysell > 0:
             if self.p.valid:
-                valid = self.data.datetime.date(0) + datetime.timedelta(days=self.p.value)
+                valid = self.data.datetime.date(0) + \
+                        datetime.timedelta(days=self.p.valid)
             else:
-                value = None
+                valid = None
 
-            if self.p.execute == "Market":
-                self.buy(exectype=bt.Order.Market)
-                self.log('BUY CREATE, exectyoe Market, price %.2f' %self.data.close[0])
+            # Not in the market and signal to buy
+            if self.p.exectype == 'Market':
+                self.buy(exectype=bt.Order.Market)  # default if not given
 
-
-            elif self.p.execute == "Close":
-                self.buy(exectype=bt.Order.Close)
-                self.log('BUY CREATE, exectype Close, price %.2f'%
+                self.log('BUY CREATE, exectype Market, price %.2f' %
                          self.data.close[0])
 
-            elif self.p.execute == "Limit":
-                price = self.data.close*(1.0 - self.p.perc1/100.0)
-                self.buy(exectype=bt.Order.Limit, price=price, valid=value)
+            elif self.p.exectype == 'Close':
+                self.buy(exectype=bt.Order.Close)
+
+                self.log('BUY CREATE, exectype Close, price %.2f' %
+                         self.data.close[0])
+
+            elif self.p.exectype == 'Limit':
+                price = self.data.close * (1.0 - self.p.perc1 / 100.0)
+
+                self.buy(exectype=bt.Order.Limit, price=price, valid=valid)
 
                 if self.p.valid:
-                    txt = 'BUY CREATE, exectype Limit, price %.2f, value %s'
-                    self.log(txt %(price, value.strftime('%Y-%m-%d')))
+                    txt = 'BUY CREATE, exectype Limit, price %.2f, valid: %s'
+                    self.log(txt % (price, valid.strftime('%Y-%m-%d')))
                 else:
-                    txt = 'BUY CREATE, exectype Limit, price %.2f, value %s'
+                    txt = 'BUY CREATE, exectype Limit, price %.2f'
                     self.log(txt % price)
 
+            elif self.p.exectype == 'Stop':
+                price = self.data.close * (1.0 + self.p.perc1 / 100.0)
 
+                self.buy(exectype=bt.Order.Stop, price=price, valid=valid)
 
+                if self.p.valid:
+                    txt = 'BUY CREATE, exectype Stop, price %.2f, valid: %s'
+                    self.log(txt % (price, valid.strftime('%Y-%m-%d')))
+                else:
+                    txt = 'BUY CREATE, exectype Stop, price %.2f'
+                    self.log(txt % price)
+
+            elif self.p.exectype == 'StopLimit':
+                price = self.data.close * (1.0 + self.p.perc1 / 100.0)
+
+                plimit = self.data.close * (1.0 + self.p.perc2 / 100.0)
+
+                self.buy(exectype=bt.Order.StopLimit, price=price, valid=valid,
+                         plimit=plimit)
+
+                if self.p.valid:
+                    txt = ('BUY CREATE, exectype StopLimit, price %.2f,'
+                           ' valid: %s, pricelimit: %.2f')
+                    self.log(txt % (price, valid.strftime('%Y-%m-%d'), plimit))
+                else:
+                    txt = ('BUY CREATE, exectype StopLimit, price %.2f,'
+                           ' pricelimit: %.2f')
+                    self.log(txt % (price, plimit))
 
 
 def runstrat():
@@ -140,18 +152,18 @@ def runstrat():
     cerebro.adddata(data)
 
     cerebro.addstrategy(
-        MyStrategy,
+        OrderExecutionStrategy,
         exectype=args.exectype,
         perc1=args.perc1,
         perc2=args.perc2,
         valid=args.valid,
         smaperiod=args.smaperiod
     )
-
     cerebro.run()
 
     if args.plot:
         cerebro.plot(numfigs=args.numfigs, style=args.plotstyle)
+
 
 def getdata(args):
 
@@ -180,6 +192,7 @@ def getdata(args):
     dfcls = dataformat[args.csvformat]
 
     return dfcls(**dfkwargs)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -236,16 +249,3 @@ def parse_args():
 
 if __name__ == '__main__':
     runstrat()
-
-
-    #
-    # def next(self):
-    #     if self.mova.lines.sma[0] > self.data.lines.close[0]:
-    #         print('Simple Moving Average is greater than the closing price')
-    #     #xxx.lines could be shortened to xxx.l
-    #      if self.data.close[0] > self.data.close[-1]:
-    #          if self.data.close[-1] > self.data.close[-2]:
-    #              print('It is bullish 3-day close')
-    #
-    #     if self.cmpval[0]:
-    #         print('Previous close is higher than the moving average')
